@@ -1,0 +1,756 @@
+---
+title: 'Threatening Communication: Diffusing the Scienfic Evidence'
+author: "Gjalt-Jorn Ygram Peters, Rob A. C. Ruiter, Peter Verboon & Gerjo Kok"
+date: "`r format(Sys.time(), '%Y-%m-%d at %X');`"
+output:
+  html_document:
+    toc: true
+---
+
+```{r preparation, echo=FALSE, results="hide", message=FALSE, error=FALSE, cache=FALSE}
+
+################################################################################
+################################################################################
+### Configure basic settings
+################################################################################
+################################################################################
+
+########################################################################
+### Paths
+########################################################################
+
+### Add any relevant paths to this vector. The script will select the
+### correct path itself.
+
+basePathVector <- c("B:/Data/research/fear is a bad counsellor/intervention/osf",
+                    "");
+
+########################################################################
+### Set the variables with the paths
+########################################################################
+
+### Check which paths exist and set the first existing path in the list
+### as the base path
+basePath <- basePathVector[sapply(basePathVector, dir.exists)][1];
+
+### Set the additional paths and the filenames
+dataPath <- file.path(basePath, "data");
+prepostdataFileName <- 'survey_68955_data_file.csv';
+prepostDataLoadScriptName <- '68955_Surveydata_syntax.R';
+followupDataFileName <- 'survey_97291_data_file.csv';
+followupDataLoadScriptName <- '97291_Surveydata_syntax.R';
+
+###########################################################
+### Installing & loading the required packages
+###########################################################
+
+### If not present yet, install the
+### userfriendlyscience package
+if (!is.element('userfriendlyscience', installed.packages()[,1])) {
+  ### Use Belgian https mirror; replace with NULL to choose
+  chooseCRANmirror(ind=7);
+  install.packages('userfriendlyscience', dependencies=TRUE);
+}
+
+### Load userfriendlyscience
+require('userfriendlyscience');
+
+### Load the rest of the packages, installing them if need be
+safeRequire('reshape');
+safeRequire('plyr');
+safeRequire('arm');
+safeRequire('lme4');
+safeRequire('lmerTest');
+safeRequire('pander');
+
+###########################################################
+### R Markdown configuration
+###########################################################
+
+### Setting default knitting options
+knitr::opts_chunk$set(echo=FALSE);
+knitr::opts_chunk$set(comment=NA);
+knitr::opts_chunk$set(dev="png", 
+		  		            dev.args=list(type="cairo"),
+			    	          dpi=100);
+knitr::opts_chunk$set(fig.width=5);
+knitr::opts_chunk$set(fig.height=5);
+knitr::opts_chunk$set(cache=FALSE);
+
+options(scipen=100);
+
+panderOptions('table.split.table', Inf);
+panderOptions('table.alignment.rownames', "left");
+
+# options(figure_counter = TRUE);
+# options(table_counter = TRUE);
+
+setFigCapNumbering();
+setTabCapNumbering();
+
+```
+
+```{r data-preparation}
+
+###########################################################
+### Load data
+###########################################################
+
+dat.t0t1 <- importLimeSurveyData(datafile = file.path(dataPath, prepostdataFileName),
+                                 scriptfile = file.path(dataPath, prepostDataLoadScriptName),
+                                 dataHasVarNames = FALSE, dataEncoding='UTF-8',
+                                 categoricalQuestions=c('gender', 'employer', 'role'));
+
+dat.t2 <- importLimeSurveyData(datafile = file.path(dataPath, followupDataFileName),
+                               scriptfile = file.path(dataPath, followupDataLoadScriptName),
+                               dataHasVarNames = FALSE, dataEncoding='UTF-8');
+
+
+###########################################################
+### Merge and clean datafiles
+###########################################################
+
+### Make 'pid' variable used for matching records; in the
+### first survey, the limesurvey id field; in the second
+### survey, it's stored in an invisible question 'pid'
+
+dat.t0t1$pid <- dat.t0t1$id;
+
+### The survey was just copied, because the scenarios
+### used at t2 were the same as the ones at t0 and t1.
+### Therefore, the variables have the same names, which
+### will be problematic when merging. Therefore, prefix
+### "t2_" before all variable names of the t2 dataset
+
+names(dat.t2) = paste0("t2_", names(dat.t2))
+
+### But of course we have to rename the pid variable (the
+### 10th variable) back to enable matching during the merge.
+
+names(dat.t2)[10] = "pid";
+
+### Three entries in the t2 datafile are erroneous;
+### double entries, where participants didn't enter
+### any data the first time. So we delete these. We use
+### the LimeSurvey id field for this.
+
+dat.t2 <- subset(dat.t2, (t2_id != 24) & (t2_id != 53) & (t2_id != 69));
+
+### Then we can merge the two datafiles
+
+dat.raw <- merge(dat.t0t1, dat.t2, by="pid", all=TRUE);
+
+### Remove test entries (age = 99) and entries where
+### people only opened the survey but didn't do anything
+
+dat.clean <- subset(dat.raw, age < 99 & !is.na(gender));
+
+###########################################################
+### Create new variables with names reflecting the
+### content
+###########################################################
+
+dat <- dat.clean[, c(1:15, 88:104, 178:186)]
+
+### Here, I rename variables to fit this algorithm:
+###   t0 or t2_t0: first version of each scenario
+###   t1 or t2_t1: second version of each scenario
+###     fear or know or scd: intervention type
+###       1 or 2 or 3: number of interventions presented simultaneously
+###         diet or pox or alc or smoking or traff or adh: behavioral domain
+###           1 or 2: in the first versus last 3 scenarios within version
+
+### Note: understanding exactly why these assignments
+### are how they are requires inspecting the survey
+### itself (see the .lss files and ideally import
+### them into LimeSurvey for ease of inspection;
+### a standalone (XAMPP) version of LimeSurvey can
+### be downloaded that you can use if you don't have
+### access to a webserver; it just runs locally on your PC).
+
+
+### Because the names are now algorithmic, we can use
+### loops to do the rest of the calculations. For these
+### loops, we'll need some vectors.
+###
+### Note, this is the algoritm making up each variable name:
+###   t0, t1 or t2: measurement moment
+###   v1 or v2: version of each scenario
+###     fear or know or scd: intervention type
+###       1 or 2 or 3: number of interventions presented simultaneously
+###         diet or pox or alc or smoking or traff or adh: behavioral domain
+###           1 or 2: in the first versus last 3 scenarios within version
+
+dat$t0_v1_fear_1_diet_1 <- dat.clean$t0_p1_exercisediet_1;
+dat$t0_v1_fear_1_pox_1 <- dat.clean$t0_p1_bluepox_1;
+dat$t0_v1_fear_1_alc_1 <- dat.clean$t0_p1_alcohol_1;
+dat$t0_v1_fear_1_smoking_1 <- dat.clean$t0_p1_smoking_1;
+dat$t0_v1_fear_1_traff_1 <- NA;
+### This is necessary because due to a mistake in the survey,
+### t0_p1_traffic_1 was actually an SCD intervention, while it
+### should have been a fear appeal intervention.
+dat$t0_v1_fear_1_adh_1 <- dat.clean$t0_p1_adherence_1;
+dat$t0_v1_know_2_diet_1 <- dat.clean$t0_p2_exercisediet_1;
+dat$t0_v1_fear_2_diet_1 <- dat.clean$t0_p2_exercisediet_2;
+dat$t0_v1_fear_2_pox_1 <- dat.clean$t0_p2_bluepox_1;
+dat$t0_v1_know_2_pox_1 <- dat.clean$t0_p2_bluepox_2;
+dat$t0_v1_fear_2_alc_1 <- dat.clean$t0_p2_alcohol_1;
+dat$t0_v1_know_2_alc_1 <- dat.clean$t0_p2_alcohol_2;
+dat$t0_v1_know_2_smoking_1 <- dat.clean$t0_p2_smoking_1;
+dat$t0_v1_fear_2_smoking_1 <- dat.clean$t0_p2_smoking_2;
+dat$t0_v1_know_2_traff_1 <- dat.clean$t0_p2_traffic_1;
+dat$t0_v1_fear_2_traff_1 <- dat.clean$t0_p2_traffic_2;
+dat$t0_v1_fear_2_adh_1 <- dat.clean$t0_p2_adherence_1;
+dat$t0_v1_know_2_adh_1 <- dat.clean$t0_p2_adherence_2;
+dat$t0_v1_know_3_diet_1 <- dat.clean$t0_p3_exercisediet_1;
+dat$t0_v1_fear_3_diet_1 <- dat.clean$t0_p3_exercisediet_2;
+dat$t0_v1_scd_3_diet_1 <- dat.clean$t0_p3_exercisediet_3;
+dat$t0_v1_fear_3_pox_1 <- dat.clean$t0_p3_bluepox_1;
+dat$t0_v1_know_3_pox_1 <- dat.clean$t0_p3_bluepox_2;
+dat$t0_v1_scd_3_pox_1 <- dat.clean$t0_p3_bluepox_3;
+dat$t0_v1_fear_3_alc_1 <- dat.clean$t0_p3_alcohol_1;
+dat$t0_v1_know_3_alc_1 <- dat.clean$t0_p3_alcohol_2;
+dat$t0_v1_scd_3_alc_1 <- dat.clean$t0_p3_alcohol_3;
+dat$t0_v1_scd_3_smoking_1 <- dat.clean$t0_p3_smoking_1;
+dat$t0_v1_know_3_smoking_1 <- dat.clean$t0_p3_smoking_2;
+dat$t0_v1_fear_3_smoking_1 <- dat.clean$t0_p3_smoking_3;
+dat$t0_v1_know_3_traff_1 <- dat.clean$t0_p3_traffic_1;
+dat$t0_v1_fear_3_traff_1 <- dat.clean$t0_p3_traffic_2;
+dat$t0_v1_scd_3_traff_1 <- dat.clean$t0_p3_traffic_3;
+dat$t0_v1_know_3_adh_1 <- dat.clean$t0_p3_adherence_1;
+dat$t0_v1_fear_3_adh_1 <- dat.clean$t0_p3_adherence_2;
+dat$t0_v1_scd_3_adh_1 <- dat.clean$t0_p3_adherence_3;
+
+dat$t0_v1_fear_1_diet_2 <- dat.clean$t0_p4_exercisediet_1;
+dat$t0_v1_fear_1_pox_2 <- dat.clean$t0_p4_bluepox_1;
+dat$t0_v1_fear_1_alc_2 <- dat.clean$t0_p4_alcohol_1;
+dat$t0_v1_fear_1_smoking_2 <- dat.clean$t0_p4_smoking_1;
+dat$t0_v1_fear_1_traff_2 <- NA;
+### This is necessary because due to a mistake in the survey,
+### t0_p4_traffic_1 was actually an SCD intervention, while it
+### should have been a fear appeal intervention.
+dat$t0_v1_fear_1_adh_2 <- dat.clean$t0_p4_adherence_1;
+dat$t0_v1_know_2_diet_2 <- dat.clean$t0_p5_exercisediet_1;
+dat$t0_v1_fear_2_diet_2 <- dat.clean$t0_p5_exercisediet_2;
+dat$t0_v1_fear_2_pox_2 <- dat.clean$t0_p5_bluepox_1;
+dat$t0_v1_know_2_pox_2 <- dat.clean$t0_p5_bluepox_2;
+dat$t0_v1_fear_2_alc_2 <- dat.clean$t0_p5_alcohol_1;
+dat$t0_v1_know_2_alc_2 <- dat.clean$t0_p5_alcohol_2;
+dat$t0_v1_know_2_smoking_2 <- dat.clean$t0_p5_smoking_1;
+dat$t0_v1_fear_2_smoking_2 <- dat.clean$t0_p5_smoking_2;
+dat$t0_v1_know_2_traff_2 <- dat.clean$t0_p5_traffic_1;
+dat$t0_v1_fear_2_traff_2 <- dat.clean$t0_p5_traffic_2;
+dat$t0_v1_fear_2_adh_2 <- dat.clean$t0_p5_adherence_1;
+dat$t0_v1_know_2_adh_2 <- dat.clean$t0_p5_adherence_2;
+dat$t0_v1_know_3_diet_2 <- dat.clean$t0_p6_exercisediet_1;
+dat$t0_v1_fear_3_diet_2 <- dat.clean$t0_p6_exercisediet_2;
+dat$t0_v1_scd_3_diet_2 <- dat.clean$t0_p6_exercisediet_3;
+dat$t0_v1_fear_3_pox_2 <- dat.clean$t0_p6_bluepox_1;
+dat$t0_v1_know_3_pox_2 <- dat.clean$t0_p6_bluepox_2;
+dat$t0_v1_scd_3_pox_2 <- dat.clean$t0_p6_bluepox_3;
+dat$t0_v1_fear_3_alc_2 <- dat.clean$t0_p6_alcohol_1;
+dat$t0_v1_know_3_alc_2 <- dat.clean$t0_p6_alcohol_2;
+dat$t0_v1_scd_3_alc_2 <- dat.clean$t0_p6_alcohol_3;
+dat$t0_v1_scd_3_smoking_2 <- dat.clean$t0_p6_smoking_1;
+dat$t0_v1_know_3_smoking_2 <- dat.clean$t0_p6_smoking_2;
+dat$t0_v1_fear_3_smoking_2 <- dat.clean$t0_p6_smoking_3;
+dat$t0_v1_know_3_traff_2 <- dat.clean$t0_p6_traffic_1;
+dat$t0_v1_fear_3_traff_2 <- dat.clean$t0_p6_traffic_2;
+dat$t0_v1_scd_3_traff_2 <- dat.clean$t0_p6_traffic_3;
+dat$t0_v1_know_3_adh_2 <- dat.clean$t0_p6_adherence_1;
+dat$t0_v1_fear_3_adh_2 <- dat.clean$t0_p6_adherence_2;
+dat$t0_v1_scd_3_adh_2 <- dat.clean$t0_p6_adherence_3;
+
+dat$t1_v2_fear_1_diet_1 <- dat.clean$t1_p1_exercisediet_1;
+dat$t1_v2_fear_1_pox_1 <- dat.clean$t1_p1_bluepox_1;
+dat$t1_v2_fear_1_alc_1 <- dat.clean$t1_p1_alcohol_1;
+dat$t1_v2_fear_1_smoking_1 <- dat.clean$t1_p1_smoking_1;
+dat$t1_v2_fear_1_traff_1 <- dat.clean$t1_p1_traffic_1;
+dat$t1_v2_fear_1_adh_1 <- dat.clean$t1_p1_adherence_1;
+dat$t1_v2_know_2_diet_1 <- dat.clean$t1_p2_exercisediet_1;
+dat$t1_v2_fear_2_diet_1 <- dat.clean$t1_p2_exercisediet_2;
+dat$t1_v2_fear_2_pox_1 <- dat.clean$t1_p2_bluepox_1;
+dat$t1_v2_know_2_pox_1 <- dat.clean$t1_p2_bluepox_2;
+dat$t1_v2_know_2_alc_1 <- dat.clean$t1_p2_alcohol_1;
+dat$t1_v2_fear_2_alc_1 <- dat.clean$t1_p2_alcohol_2;
+dat$t1_v2_fear_2_smoking_1 <- dat.clean$t1_p2_smoking_1;
+dat$t1_v2_know_2_smoking_1 <- dat.clean$t1_p2_smoking_2;
+dat$t1_v2_know_2_traff_1 <- dat.clean$t1_p2_traffic_1;
+dat$t1_v2_fear_2_traff_1 <- dat.clean$t1_p2_traffic_2;
+dat$t1_v2_know_2_adh_1 <- dat.clean$t1_p2_adherence_1;
+dat$t1_v2_fear_2_adh_1 <- dat.clean$t1_p2_adherence_2;
+dat$t1_v2_know_3_diet_1 <- dat.clean$t1_p3_exercisediet_1;
+dat$t1_v2_fear_3_diet_1 <- dat.clean$t1_p3_exercisediet_2;
+dat$t1_v2_scd_3_diet_1 <- dat.clean$t1_p3_exercisediet_3;
+dat$t1_v2_fear_3_pox_1 <- dat.clean$t1_p3_bluepox_1;
+dat$t1_v2_know_3_pox_1 <- dat.clean$t1_p3_bluepox_2;
+dat$t1_v2_scd_3_pox_1 <- dat.clean$t1_p3_bluepox_3;
+dat$t1_v2_know_3_alc_1 <- dat.clean$t1_p3_alcohol_1;
+dat$t1_v2_fear_3_alc_1 <- dat.clean$t1_p3_alcohol_2;
+dat$t1_v2_scd_3_alc_1 <- dat.clean$t1_p3_alcohol_3;
+dat$t1_v2_fear_3_smoking_1 <- dat.clean$t1_p3_smoking_1;
+dat$t1_v2_scd_3_smoking_1 <- dat.clean$t1_p3_smoking_2;
+dat$t1_v2_know_3_smoking_1 <- dat.clean$t1_p3_smoking_3;
+dat$t1_v2_know_3_traff_1 <- dat.clean$t1_p3_traffic_1;
+dat$t1_v2_fear_3_traff_1 <- dat.clean$t1_p3_traffic_2;
+dat$t1_v2_scd_3_traff_1 <- dat.clean$t1_p3_traffic_3;
+dat$t1_v2_know_3_adh_1 <- dat.clean$t1_p3_adherence_1;
+dat$t1_v2_fear_3_adh_1 <- dat.clean$t1_p3_adherence_2;
+dat$t1_v2_scd_3_adh_1 <- dat.clean$t1_p3_adherence_3;
+
+dat$t1_v2_fear_1_diet_2 <- dat.clean$t1_p4_exercisediet_1;
+dat$t1_v2_fear_1_pox_2 <- dat.clean$t1_p4_bluepox_1;
+dat$t1_v2_fear_1_alc_2 <- dat.clean$t1_p4_alcohol_1;
+dat$t1_v2_fear_1_smoking_2 <- dat.clean$t1_p4_smoking_1;
+dat$t1_v2_fear_1_traff_2 <- dat.clean$t1_p4_traffic_1;
+dat$t1_v2_fear_1_adh_2 <- dat.clean$t1_p4_adherence_1;
+dat$t1_v2_know_2_diet_2 <- dat.clean$t1_p5_exercisediet_1;
+dat$t1_v2_fear_2_diet_2 <- dat.clean$t1_p5_exercisediet_2;
+dat$t1_v2_fear_2_pox_2 <- dat.clean$t1_p5_bluepox_1;
+dat$t1_v2_know_2_pox_2 <- dat.clean$t1_p5_bluepox_2;
+dat$t1_v2_know_2_alc_2 <- dat.clean$t1_p5_alcohol_1;
+dat$t1_v2_fear_2_alc_2 <- dat.clean$t1_p5_alcohol_2;
+dat$t1_v2_fear_2_smoking_2 <- dat.clean$t1_p5_smoking_1;
+dat$t1_v2_know_2_smoking_2 <- dat.clean$t1_p5_smoking_2;
+dat$t1_v2_know_2_traff_2 <- dat.clean$t1_p5_traffic_1;
+dat$t1_v2_fear_2_traff_2 <- dat.clean$t1_p5_traffic_2;
+dat$t1_v2_know_2_adh_2 <- dat.clean$t1_p5_adherence_1;
+dat$t1_v2_fear_2_adh_2 <- dat.clean$t1_p5_adherence_2;
+dat$t1_v2_know_3_diet_2 <- dat.clean$t1_p6_exercisediet_1;
+dat$t1_v2_fear_3_diet_2 <- dat.clean$t1_p6_exercisediet_2;
+dat$t1_v2_scd_3_diet_2 <- dat.clean$t1_p6_exercisediet_3;
+dat$t1_v2_fear_3_pox_2 <- dat.clean$t1_p6_bluepox_1;
+dat$t1_v2_know_3_pox_2 <- dat.clean$t1_p6_bluepox_2;
+dat$t1_v2_scd_3_pox_2 <- dat.clean$t1_p6_bluepox_3;
+dat$t1_v2_know_3_alc_2 <- dat.clean$t1_p6_alcohol_1;
+dat$t1_v2_fear_3_alc_2 <- dat.clean$t1_p6_alcohol_2;
+dat$t1_v2_scd_3_alc_2 <- dat.clean$t1_p6_alcohol_3;
+dat$t1_v2_fear_3_smoking_2 <- dat.clean$t1_p6_smoking_1;
+dat$t1_v2_scd_3_smoking_2 <- dat.clean$t1_p6_smoking_2;
+dat$t1_v2_know_3_smoking_2 <- dat.clean$t1_p6_smoking_3;
+dat$t1_v2_know_3_traff_2 <- dat.clean$t1_p6_traffic_1;
+dat$t1_v2_fear_3_traff_2 <- dat.clean$t1_p6_traffic_2;
+dat$t1_v2_scd_3_traff_2 <- dat.clean$t1_p6_traffic_3;
+dat$t1_v2_know_3_adh_2 <- dat.clean$t1_p6_adherence_1;
+dat$t1_v2_fear_3_adh_2 <- dat.clean$t1_p6_adherence_2;
+dat$t1_v2_scd_3_adh_2 <- dat.clean$t1_p6_adherence_3;
+
+dat$t2_v1_fear_1_diet_1 <- dat.clean$t2_t0_p1_exercisediet_1;
+dat$t2_v1_fear_1_pox_1 <- dat.clean$t2_t0_p1_bluepox_1;
+dat$t2_v1_fear_1_alc_1 <- dat.clean$t2_t0_p1_alcohol_1;
+dat$t2_v1_fear_1_smoking_1 <- dat.clean$t2_t0_p1_smoking_1;
+dat$t2_v1_fear_1_traff_1 <- NA;
+### This is necessary because due to a mistake in the survey,
+### t2_t0_p1_traffic_1 was actually an SCD intervention, while it
+### should have been a fear appeal intervention.
+dat$t2_v1_fear_1_adh_1 <- dat.clean$t2_t0_p1_adherence_1;
+dat$t2_v1_know_2_diet_1 <- dat.clean$t2_t0_p2_exercisediet_1;
+dat$t2_v1_fear_2_diet_1 <- dat.clean$t2_t0_p2_exercisediet_2;
+dat$t2_v1_fear_2_pox_1 <- dat.clean$t2_t0_p2_bluepox_1;
+dat$t2_v1_know_2_pox_1 <- dat.clean$t2_t0_p2_bluepox_2;
+dat$t2_v1_fear_2_alc_1 <- dat.clean$t2_t0_p2_alcohol_1;
+dat$t2_v1_know_2_alc_1 <- dat.clean$t2_t0_p2_alcohol_2;
+dat$t2_v1_know_2_smoking_1 <- dat.clean$t2_t0_p2_smoking_1;
+dat$t2_v1_fear_2_smoking_1 <- dat.clean$t2_t0_p2_smoking_2;
+dat$t2_v1_know_2_traff_1 <- dat.clean$t2_t0_p2_traffic_1;
+dat$t2_v1_fear_2_traff_1 <- dat.clean$t2_t0_p2_traffic_2;
+dat$t2_v1_fear_2_adh_1 <- dat.clean$t2_t0_p2_adherence_1;
+dat$t2_v1_know_2_adh_1 <- dat.clean$t2_t0_p2_adherence_2;
+dat$t2_v1_know_3_diet_1 <- dat.clean$t2_t0_p3_exercisediet_1;
+dat$t2_v1_fear_3_diet_1 <- dat.clean$t2_t0_p3_exercisediet_2;
+dat$t2_v1_scd_3_diet_1 <- dat.clean$t2_t0_p3_exercisediet_3;
+dat$t2_v1_fear_3_pox_1 <- dat.clean$t2_t0_p3_bluepox_1;
+dat$t2_v1_know_3_pox_1 <- dat.clean$t2_t0_p3_bluepox_2;
+dat$t2_v1_scd_3_pox_1 <- dat.clean$t2_t0_p3_bluepox_3;
+dat$t2_v1_fear_3_alc_1 <- dat.clean$t2_t0_p3_alcohol_1;
+dat$t2_v1_know_3_alc_1 <- dat.clean$t2_t0_p3_alcohol_2;
+dat$t2_v1_scd_3_alc_1 <- dat.clean$t2_t0_p3_alcohol_3;
+dat$t2_v1_scd_3_smoking_1 <- dat.clean$t2_t0_p3_smoking_1;
+dat$t2_v1_know_3_smoking_1 <- dat.clean$t2_t0_p3_smoking_2;
+dat$t2_v1_fear_3_smoking_1 <- dat.clean$t2_t0_p3_smoking_3;
+dat$t2_v1_know_3_traff_1 <- dat.clean$t2_t0_p3_traffic_1;
+dat$t2_v1_fear_3_traff_1 <- dat.clean$t2_t0_p3_traffic_2;
+dat$t2_v1_scd_3_traff_1 <- dat.clean$t2_t0_p3_traffic_3;
+dat$t2_v1_know_3_adh_1 <- dat.clean$t2_t0_p3_adherence_1;
+dat$t2_v1_fear_3_adh_1 <- dat.clean$t2_t0_p3_adherence_2;
+dat$t2_v1_scd_3_adh_1 <- dat.clean$t2_t0_p3_adherence_3;
+
+dat$t2_v1_fear_1_diet_2 <- dat.clean$t2_t0_p4_exercisediet_1;
+dat$t2_v1_fear_1_pox_2 <- dat.clean$t2_t0_p4_bluepox_1;
+dat$t2_v1_fear_1_alc_2 <- dat.clean$t2_t0_p4_alcohol_1;
+dat$t2_v1_fear_1_smoking_2 <- dat.clean$t2_t0_p4_smoking_1;
+dat$t2_v1_fear_1_traff_2 <- NA;
+### This is necessary because due to a mistake in the survey,
+### t2_t0_p4_traffic_1 was actually an SCD intervention, while it
+### should have been a fear appeal intervention.
+dat$t2_v1_fear_1_adh_2 <- dat.clean$t2_t0_p4_adherence_1;
+dat$t2_v1_know_2_diet_2 <- dat.clean$t2_t0_p5_exercisediet_1;
+dat$t2_v1_fear_2_diet_2 <- dat.clean$t2_t0_p5_exercisediet_2;
+dat$t2_v1_fear_2_pox_2 <- dat.clean$t2_t0_p5_bluepox_1;
+dat$t2_v1_know_2_pox_2 <- dat.clean$t2_t0_p5_bluepox_2;
+dat$t2_v1_fear_2_alc_2 <- dat.clean$t2_t0_p5_alcohol_1;
+dat$t2_v1_know_2_alc_2 <- dat.clean$t2_t0_p5_alcohol_2;
+dat$t2_v1_know_2_smoking_2 <- dat.clean$t2_t0_p5_smoking_1;
+dat$t2_v1_fear_2_smoking_2 <- dat.clean$t2_t0_p5_smoking_2;
+dat$t2_v1_know_2_traff_2 <- dat.clean$t2_t0_p5_traffic_1;
+dat$t2_v1_fear_2_traff_2 <- dat.clean$t2_t0_p5_traffic_2;
+dat$t2_v1_fear_2_adh_2 <- dat.clean$t2_t0_p5_adherence_1;
+dat$t2_v1_know_2_adh_2 <- dat.clean$t2_t0_p5_adherence_2;
+dat$t2_v1_know_3_diet_2 <- dat.clean$t2_t0_p6_exercisediet_1;
+dat$t2_v1_fear_3_diet_2 <- dat.clean$t2_t0_p6_exercisediet_2;
+dat$t2_v1_scd_3_diet_2 <- dat.clean$t2_t0_p6_exercisediet_3;
+dat$t2_v1_fear_3_pox_2 <- dat.clean$t2_t0_p6_bluepox_1;
+dat$t2_v1_know_3_pox_2 <- dat.clean$t2_t0_p6_bluepox_2;
+dat$t2_v1_scd_3_pox_2 <- dat.clean$t2_t0_p6_bluepox_3;
+dat$t2_v1_fear_3_alc_2 <- dat.clean$t2_t0_p6_alcohol_1;
+dat$t2_v1_know_3_alc_2 <- dat.clean$t2_t0_p6_alcohol_2;
+dat$t2_v1_scd_3_alc_2 <- dat.clean$t2_t0_p6_alcohol_3;
+dat$t2_v1_scd_3_smoking_2 <- dat.clean$t2_t0_p6_smoking_1;
+dat$t2_v1_know_3_smoking_2 <- dat.clean$t2_t0_p6_smoking_2;
+dat$t2_v1_fear_3_smoking_2 <- dat.clean$t2_t0_p6_smoking_3;
+dat$t2_v1_know_3_traff_2 <- dat.clean$t2_t0_p6_traffic_1;
+dat$t2_v1_fear_3_traff_2 <- dat.clean$t2_t0_p6_traffic_2;
+dat$t2_v1_scd_3_traff_2 <- dat.clean$t2_t0_p6_traffic_3;
+dat$t2_v1_know_3_adh_2 <- dat.clean$t2_t0_p6_adherence_1;
+dat$t2_v1_fear_3_adh_2 <- dat.clean$t2_t0_p6_adherence_2;
+dat$t2_v1_scd_3_adh_2 <- dat.clean$t2_t0_p6_adherence_3;
+
+dat$t2_v2_fear_1_diet_1 <- dat.clean$t2_t1_p1_exercisediet_1;
+dat$t2_v2_fear_1_pox_1 <- dat.clean$t2_t1_p1_bluepox_1;
+dat$t2_v2_fear_1_alc_1 <- dat.clean$t2_t1_p1_alcohol_1;
+dat$t2_v2_fear_1_smoking_1 <- dat.clean$t2_t1_p1_smoking_1;
+dat$t2_v2_fear_1_traff_1 <- dat.clean$t2_t1_p1_traffic_1;
+dat$t2_v2_fear_1_adh_1 <- dat.clean$t2_t1_p1_adherence_1;
+dat$t2_v2_know_2_diet_1 <- dat.clean$t2_t1_p2_exercisediet_1;
+dat$t2_v2_fear_2_diet_1 <- dat.clean$t2_t1_p2_exercisediet_2;
+dat$t2_v2_fear_2_pox_1 <- dat.clean$t2_t1_p2_bluepox_1;
+dat$t2_v2_know_2_pox_1 <- dat.clean$t2_t1_p2_bluepox_2;
+dat$t2_v2_know_2_alc_1 <- dat.clean$t2_t1_p2_alcohol_1;
+dat$t2_v2_fear_2_alc_1 <- dat.clean$t2_t1_p2_alcohol_2;
+dat$t2_v2_fear_2_smoking_1 <- dat.clean$t2_t1_p2_smoking_1;
+dat$t2_v2_know_2_smoking_1 <- dat.clean$t2_t1_p2_smoking_2;
+dat$t2_v2_know_2_traff_1 <- dat.clean$t2_t1_p2_traffic_1;
+dat$t2_v2_fear_2_traff_1 <- dat.clean$t2_t1_p2_traffic_2;
+dat$t2_v2_know_2_adh_1 <- dat.clean$t2_t1_p2_adherence_1;
+dat$t2_v2_fear_2_adh_1 <- dat.clean$t2_t1_p2_adherence_2;
+dat$t2_v2_know_3_diet_1 <- dat.clean$t2_t1_p3_exercisediet_1;
+dat$t2_v2_fear_3_diet_1 <- dat.clean$t2_t1_p3_exercisediet_2;
+dat$t2_v2_scd_3_diet_1 <- dat.clean$t2_t1_p3_exercisediet_3;
+dat$t2_v2_fear_3_pox_1 <- dat.clean$t2_t1_p3_bluepox_1;
+dat$t2_v2_know_3_pox_1 <- dat.clean$t2_t1_p3_bluepox_2;
+dat$t2_v2_scd_3_pox_1 <- dat.clean$t2_t1_p3_bluepox_3;
+dat$t2_v2_know_3_alc_1 <- dat.clean$t2_t1_p3_alcohol_1;
+dat$t2_v2_fear_3_alc_1 <- dat.clean$t2_t1_p3_alcohol_2;
+dat$t2_v2_scd_3_alc_1 <- dat.clean$t2_t1_p3_alcohol_3;
+dat$t2_v2_fear_3_smoking_1 <- dat.clean$t2_t1_p3_smoking_1;
+dat$t2_v2_scd_3_smoking_1 <- dat.clean$t2_t1_p3_smoking_2;
+dat$t2_v2_know_3_smoking_1 <- dat.clean$t2_t1_p3_smoking_3;
+dat$t2_v2_know_3_traff_1 <- dat.clean$t2_t1_p3_traffic_1;
+dat$t2_v2_fear_3_traff_1 <- dat.clean$t2_t1_p3_traffic_2;
+dat$t2_v2_scd_3_traff_1 <- dat.clean$t2_t1_p3_traffic_3;
+dat$t2_v2_know_3_adh_1 <- dat.clean$t2_t1_p3_adherence_1;
+dat$t2_v2_fear_3_adh_1 <- dat.clean$t2_t1_p3_adherence_2;
+dat$t2_v2_scd_3_adh_1 <- dat.clean$t2_t1_p3_adherence_3;
+
+dat$t2_v2_fear_1_diet_2 <- dat.clean$t2_t1_p4_exercisediet_1;
+dat$t2_v2_fear_1_pox_2 <- dat.clean$t2_t1_p4_bluepox_1;
+dat$t2_v2_fear_1_alc_2 <- dat.clean$t2_t1_p4_alcohol_1;
+dat$t2_v2_fear_1_smoking_2 <- dat.clean$t2_t1_p4_smoking_1;
+dat$t2_v2_fear_1_traff_2 <- dat.clean$t2_t1_p4_traffic_1;
+dat$t2_v2_fear_1_adh_2 <- dat.clean$t2_t1_p4_adherence_1;
+dat$t2_v2_know_2_diet_2 <- dat.clean$t2_t1_p5_exercisediet_1;
+dat$t2_v2_fear_2_diet_2 <- dat.clean$t2_t1_p5_exercisediet_2;
+dat$t2_v2_fear_2_pox_2 <- dat.clean$t2_t1_p5_bluepox_1;
+dat$t2_v2_know_2_pox_2 <- dat.clean$t2_t1_p5_bluepox_2;
+dat$t2_v2_know_2_alc_2 <- dat.clean$t2_t1_p5_alcohol_1;
+dat$t2_v2_fear_2_alc_2 <- dat.clean$t2_t1_p5_alcohol_2;
+dat$t2_v2_fear_2_smoking_2 <- dat.clean$t2_t1_p5_smoking_1;
+dat$t2_v2_know_2_smoking_2 <- dat.clean$t2_t1_p5_smoking_2;
+dat$t2_v2_know_2_traff_2 <- dat.clean$t2_t1_p5_traffic_1;
+dat$t2_v2_fear_2_traff_2 <- dat.clean$t2_t1_p5_traffic_2;
+dat$t2_v2_know_2_adh_2 <- dat.clean$t2_t1_p5_adherence_1;
+dat$t2_v2_fear_2_adh_2 <- dat.clean$t2_t1_p5_adherence_2;
+dat$t2_v2_know_3_diet_2 <- dat.clean$t2_t1_p6_exercisediet_1;
+dat$t2_v2_fear_3_diet_2 <- dat.clean$t2_t1_p6_exercisediet_2;
+dat$t2_v2_scd_3_diet_2 <- dat.clean$t2_t1_p6_exercisediet_3;
+dat$t2_v2_fear_3_pox_2 <- dat.clean$t2_t1_p6_bluepox_1;
+dat$t2_v2_know_3_pox_2 <- dat.clean$t2_t1_p6_bluepox_2;
+dat$t2_v2_scd_3_pox_2 <- dat.clean$t2_t1_p6_bluepox_3;
+dat$t2_v2_know_3_alc_2 <- dat.clean$t2_t1_p6_alcohol_1;
+dat$t2_v2_fear_3_alc_2 <- dat.clean$t2_t1_p6_alcohol_2;
+dat$t2_v2_scd_3_alc_2 <- dat.clean$t2_t1_p6_alcohol_3;
+dat$t2_v2_fear_3_smoking_2 <- dat.clean$t2_t1_p6_smoking_1;
+dat$t2_v2_scd_3_smoking_2 <- dat.clean$t2_t1_p6_smoking_2;
+dat$t2_v2_know_3_smoking_2 <- dat.clean$t2_t1_p6_smoking_3;
+dat$t2_v2_know_3_traff_2 <- dat.clean$t2_t1_p6_traffic_1;
+dat$t2_v2_fear_3_traff_2 <- dat.clean$t2_t1_p6_traffic_2;
+dat$t2_v2_scd_3_traff_2 <- dat.clean$t2_t1_p6_traffic_3;
+dat$t2_v2_know_3_adh_2 <- dat.clean$t2_t1_p6_adherence_1;
+dat$t2_v2_fear_3_adh_2 <- dat.clean$t2_t1_p6_adherence_2;
+dat$t2_v2_scd_3_adh_2 <- dat.clean$t2_t1_p6_adherence_3;
+
+### Rename statement variables to sensible names
+names(dat)[names(dat) == 'statements_1'] <- 'ifConfrontingAlsoDesirableBehavior';
+names(dat)[names(dat) == 'statements_2'] <- 'roleModelIdentification';
+names(dat)[names(dat) == 'statements_3'] <- 'importanceOfSelfEfficacyOrSkills';
+names(dat)[names(dat) == 'statements_4'] <- 'confrontingInfoDrawsAttention';
+names(dat)[names(dat) == 'statements_5'] <- 'emotionalInfoBetterRemembered';
+names(dat)[names(dat) == 'statements_6'] <- 'emotionsTriggerSelfreflection';
+names(dat)[names(dat) == 'statements_7'] <- 'inBehaviorChangeAssumeRationality';
+names(dat)[names(dat) == 'statements_8'] <- 'usefulToConsiderOneself';
+names(dat)[names(dat) == 'statements_9'] <- 'importantToIncreaseRiskPerception';
+names(dat)[names(dat) == 'statements_10'] <- 'insufficientAwarenessNegativeConsequence';
+names(dat)[names(dat) == 'statements_11'] <- 'emphasisOnSeverityPersuadesSusceptibility';
+names(dat)[names(dat) == 'statements_12'] <- 'behaviorChangeEasyJustRiskUnaware';
+names(dat)[names(dat) == 'statements_13'] <- 'threateningInfoAlsoDesirableBehavior';
+
+### Store corresponding translations of questions
+statements <-
+  c("If you present confronting information,\nyou also have to tell people\nwhat the desired behavior is", 
+    "One of the most important reasons why\npeople exhibit unhealthy or risky behavior\nis that they have a hard time exhibiting the right behavior,\nnot that they do not see the risks", 
+    "Confronting communications draws attention", 
+    "People remember emotional communications better", 
+    "Communication that evokes emotions leads to\nself-reflection regarding the relevant behavior", 
+    "Regarding behavior change interventions,\nyou have to assume that people think and\nact logically on the basis of new information", 
+    "When thinking about health promotion interventions\nit's often useful to stop to think how\nsomething would affect you yourself", 
+    "One of the most important aspects of\nintervention is increasing risk perception", 
+    "People who behave unhealthily or riskily\nare usually not sufficiently aware of\nthe potential negative consequences", 
+    "If you sufficiently emphasize the severity\nof potential negative consequences of behavior,\npeople become aware that it can happen to them too", 
+    "People who exhibit unhealthy behavior are\nusually quite able to behave differently;\nthey just don't understand the risks", 
+    "If you present threatening information about\na behavior, you also have to tell people\nhow they can address that behavior");
+
+beliefs <- c("Threatening interventions should enhance efficacy", 
+             "Interventions should increase risk perception (reversed)", 
+             "Interventions should use emotion and confrontation", 
+             "Interventions should use emotion and confrontation", 
+             "Interventions should use emotion and confrontation", 
+             "Reliability of common sense", 
+             "Reliability of common sense", 
+             "Interventions should increase risk perception", 
+             "Interventions should increase risk perception", 
+             "Increasing severity increases susceptibility", 
+             "Interventions should increase risk perception", 
+             "Threatening interventions should enhance efficacy");
+
+### Store vector with separate statements (omitting the filler statement,
+### roleModelIdentification);
+relevantStatements <- c('ifConfrontingAlsoDesirableBehavior',
+                        'importanceOfSelfEfficacyOrSkills',
+                        'confrontingInfoDrawsAttention',
+                        'emotionalInfoBetterRemembered',
+                        'emotionsTriggerSelfreflection',
+                        'inBehaviorChangeAssumeRationality',
+                        'usefulToConsiderOneself',
+                        'importantToIncreaseRiskPerception',
+                        'insufficientAwarenessNegativeConsequence',
+                        'emphasisOnSeverityPersuadesSusceptibility',
+                        'behaviorChangeEasyJustRiskUnaware',
+                        'threateningInfoAlsoDesirableBehavior');
+
+  ### Means for the different statements
+  # round(colMeans(dat[, relevantStatements], na.rm=TRUE), 2);
+
+  sortOrder <- order(colMeans(dat[, relevantStatements], na.rm=TRUE));
+
+  meansDiamondPlot(dat,
+                   items=relevantStatements[sortOrder],
+                   labels=statements[sortOrder],
+                   conf.level=.9999,
+                   dataSize=2, dataAlpha=.33, jitterWidth=.4,
+                   xlab="Scores and 99.99% confidence intervals for the means")
+
+```
+
+```{r indices}
+########################################################################
+### Compute indices
+########################################################################
+
+  ### Invert reversed item
+  dat$irrelevanceOfSelfEfficacyOrSkills <-
+    invertItem(dat$importanceOfSelfEfficacyOrSkills);
+
+  ### Set scales
+  scales <- list(interventionsShouldIncreaseRiskperception = c('irrelevanceOfSelfEfficacyOrSkills',
+                                                               'importantToIncreaseRiskPerception',
+                                                               'insufficientAwarenessNegativeConsequence',
+                                                               'behaviorChangeEasyJustRiskUnaware'),
+                 threateningInterventionsShouldEnhanceEfficacy = c('ifConfrontingAlsoDesirableBehavior',
+                                                                   'threateningInfoAlsoDesirableBehavior'),
+                 interventionsShouldUseEmotionAndConfrontation = c('confrontingInfoDrawsAttention',
+                                                                   'emotionalInfoBetterRemembered',
+                                                                   'emotionsTriggerSelfreflection'),
+                 commonSenseIsReliableInInterventionDevelopment = c('inBehaviorChangeAssumeRationality',
+                                                                    'usefulToConsiderOneself'),
+                 increasingSeverityIncreasesSusceptibility = 'emphasisOnSeverityPersuadesSusceptibility');
+
+  dat <- makeScales(dat, scales);
+
+  sortOrder <- order(colMeans(dat[, names(scales)], na.rm=TRUE));
+
+  meansDiamondPlot(dat,
+                   items=names(scales)[sortOrder],
+                   conf.level=.9999,
+                   dataSize=2, dataAlpha=.33, jitterWidth=.4,
+                   xlab="Scores and 99.99% confidence intervals for the means")
+
+```
+
+```{r translate}
+########################################################################
+### Translate variable levels
+########################################################################
+
+  levels(dat$gender) <- c("Female", "Male");
+
+  levels(dat$role) <- c("Intervention developers",
+                        "Program/campaign leaders",
+                        "Policy makers",
+                        "Managers",
+                        "Politicians",
+                        "Scientists",
+                        "Advertising professionals");
+
+  levels(dat$employer) <- c("A national health promoting organisation",
+                            "A regional health promoting organisation",
+                            "A commercial organisation (e.g. advertising agency)",
+                            "Municipal government",
+                            "Provincial government",
+                            "National government",
+                            "A university");
+
+```
+
+
+```{r dropout}
+########################################################################
+### Add variables to track progress
+########################################################################
+
+### Create booleans to indicate whether people compleetd
+### first first and second wave
+dat$did_t0t1 <- !is.na(dat$submitdate) & !is.na(dat$group) & !is.na(dat$gender);
+dat$did_t2 <- !is.na(dat$t2_submitdate) & !is.na(dat$t2_group);
+
+### Create a 'progress' variable
+dat$progress <- ifelse(dat$did_t0t1, 1, 0);
+dat$progress <- ifelse(dat$did_t2, 2, dat$progress);
+dat$progress <- factor(dat$progress, levels=c(0, 1, 2), labels=c("Only started", "Finished first phase", "finished second phase"));
+
+### Prepare dropout table
+progress <- data.frame(matrix(table(dat$role, dat$progress), ncol=3));
+colnames(progress) <- c('t0', 't1', 't2');
+
+dropOut <- data.frame(t0 = progress$t0 + progress$t1 + progress$t2);
+dropOut$t1 <- dropOut$t0 - progress$t0;
+dropOut$t2 <- progress$t2;
+
+table1 <- dropOut;
+
+table1$gender <- round(data.frame(matrix(table(dat$role, dat$gender), ncol=2) / dropOut$t0)[, 1] * 100, 0);
+
+table1$age <- paste0(round(as.numeric(by(dat$age, dat$role, mean, na.rm=TRUE)), 1),
+                     " (",
+                     round(as.numeric(by(dat$age, dat$role, sd, na.rm=TRUE)), 1),
+                     ")");
+
+rownames(table1) <- levels(dat$role);
+colnames(table1) <- c('N_t0', 'N_t1', 'N_t2', '% female', 'age (SD)');
+
+### Add summary statistics
+
+table1[nrow(table1) + 1, 1] <- sum(table1[, 1], na.rm=TRUE);
+table1[nrow(table1), 2] <- sum(table1[, 2], na.rm=TRUE);
+table1[nrow(table1), 3] <- sum(table1[, 3], na.rm=TRUE);
+table1[nrow(table1), 4] <- round(sum(dat$gender == 'Female', na.rm=TRUE) / sum(!is.na(dat$gender)) * 100);
+table1[nrow(table1), 5] <- paste0(round(mean(dat$age, na.rm=TRUE), 1),
+                                  " (",
+                                  round(sd(dat$age, na.rm=TRUE), 1),
+                                  ")");
+
+```
+
+```{r}
+
+
+```
+
+
+```{r multilevel-preparation}
+
+########################################################################
+########################################################################
+### Convert dataframe to long format for multilevel analyses
+########################################################################
+########################################################################
+
+### Eventually chose the approach explained at:
+### http://stackoverflow.com/questions/31707616/how-do-i-convert-a-wide-dataframe-to-a-long-dataframe-for-a-multilevel-structure?noredirect=1#comment51353639_31707616
+
+idVars <- c("id", "group", "age", "gender", "employer", "role",
+            names(dat)[16:28]);
+
+moltenData <- melt(dat, id.vars=idVars)
+
+identifyingColumns <- ldply(strsplit(as.character(moltenData$variable), split="_"), function(x) {
+  if (length(x) == 6) return(x) else return(rep(NA, 6));
+});
+
+longData <- cbind(moltenData, identifyingColumns);
+
+colnames(longData) <- c(idVars, 'variable', 'value', 'measurementMoment', 'version',
+                        'interventionType', 'numberOfScenarios', 'behaviorDomain',
+                        'firstOrLastHalf');
+colnames(longData)[1] <- 'subject';
+
+### Select data for multilevel analyses
+lDat <- longData[!is.na(longData$measurementMoment), ];
+
+### Convert value to numeric
+lDat$value <- as.numeric(lDat$value);
+
+### Set categorical predictors as factors so that dummy coding
+### is automatically applies
+lDat$interventionType <- factor(lDat$interventionType);
+lDat$measurementMoment <- factor(lDat$measurementMoment);
+lDat$behaviorDomain <- factor(lDat$behaviorDomain);
+lDat$numberOfScenarios <- factor(lDat$numberOfScenarios);
+
+```
+
+```{r table1, tab.cap='Sample sizes and characteristics, and associations of self-identified role with dropout during phase 1 (t0 and t1), between phase 1 and 2 (t2), and gender and age at t0.'}
+
+  pander(table1);
+
+```
+
+```{r descriptives}
+
+########################################################################
+########################################################################
+### Look at participants
+########################################################################
+########################################################################
+
+pander(freq(dat$gender));
+pander(freq(dat$role));
+pander(freq(dat$employer));
+
+```
+
+```{r}
+
+########################################################################
+########################################################################
+### Multilevel analyses: did the intervention work?
+########################################################################
+########################################################################
+
+### Run multilevel analysis
+valueLmer <- lmer(value ~ measurementMoment * interventionType + numberOfScenarios +
+                    (1|behaviorDomain/subject), data=lDat);
+
+### Show results
+summary(valueLmer);
+
+```
