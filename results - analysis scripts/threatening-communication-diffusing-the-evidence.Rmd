@@ -22,9 +22,6 @@ output:
 ### Add any relevant paths to this vector. The script will select the
 ### correct path itself.
 
-basePathVector <- c("B:/Data/research/fear is a bad counsellor/intervention/threatening-communication-diffusing-the-evidence",
-                    "");
-
 ########################################################################
 ### Set the variables with the paths
 ########################################################################
