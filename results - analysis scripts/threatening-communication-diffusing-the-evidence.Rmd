@@ -56,12 +56,15 @@ if (!is.element('userfriendlyscience', installed.packages()[,1])) {
 require('userfriendlyscience');
 
 ### Load the rest of the packages, installing them if need be
+safeRequire('rmarkdown');
+safeRequire('pander');
+safeRequire('knitr');
 safeRequire('reshape');
 safeRequire('plyr');
-safeRequire('arm');
+#safeRequire('arm');
 safeRequire('lme4');
 safeRequire('lmerTest');
-safeRequire('pander');
+safeRequire('ggplot2');
 
 ###########################################################
 ### R Markdown configuration
@@ -547,6 +550,15 @@ relevantStatements <- c('ifConfrontingAlsoDesirableBehavior',
                         'behaviorChangeEasyJustRiskUnaware',
                         'threateningInfoAlsoDesirableBehavior');
 
+```
+
+# Beliefs
+
+```{r beliefs, fig.cap="Participants' beliefs regarding behavior change." }
+########################################################################
+### Sort and visualise beliefs
+########################################################################
+
   ### Means for the different statements
   # round(colMeans(dat[, relevantStatements], na.rm=TRUE), 2);
 
@@ -561,7 +573,9 @@ relevantStatements <- c('ifConfrontingAlsoDesirableBehavior',
 
 ```
 
-```{r indices}
+# Indices
+
+```{r indices, fig.cap="Participants' beliefs regarding behavior change." }
 ########################################################################
 ### Compute indices
 ########################################################################
@@ -621,6 +635,7 @@ relevantStatements <- c('ifConfrontingAlsoDesirableBehavior',
 
 ```
 
+# Dropout
 
 ```{r dropout}
 ########################################################################
@@ -667,6 +682,7 @@ table1[nrow(table1), 5] <- paste0(round(mean(dat$age, na.rm=TRUE), 1),
                                   " (",
                                   round(sd(dat$age, na.rm=TRUE), 1),
                                   ")");
+rownames(table1)[nrow(table1)] <- 'Total';
 
 ```
 
@@ -690,7 +706,7 @@ table1[nrow(table1), 5] <- paste0(round(mean(dat$age, na.rm=TRUE), 1),
 idVars <- c("id", "group", "age", "gender", "employer", "role",
             names(dat)[16:28]);
 
-moltenData <- melt(dat, id.vars=idVars)
+moltenData <- suppressWarnings(reshape::melt(dat, id.vars=idVars));
 
 identifyingColumns <- ldply(strsplit(as.character(moltenData$variable), split="_"), function(x) {
   if (length(x) == 6) return(x) else return(rep(NA, 6));
@@ -718,13 +734,13 @@ lDat$numberOfScenarios <- factor(lDat$numberOfScenarios);
 
 ```
 
-```{r table1, tab.cap='Sample sizes and characteristics, and associations of self-identified role with dropout during phase 1 (t0 and t1), between phase 1 and 2 (t2), and gender and age at t0.'}
+```{r table1, tab.cap='Sample sizes at t0, t1 and t2 and sample characteristics.'}
 
   pander(table1);
 
 ```
 
-```{r descriptives}
+```{r descriptives, tab.cap=c("Distribution of gender.", "Distribution of role.", "Distribution of employers.")}
 
 ########################################################################
 ########################################################################
