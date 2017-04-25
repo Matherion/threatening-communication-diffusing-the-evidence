@@ -35,6 +35,7 @@ basePath <- basePathVector[sapply(basePathVector, dir.exists)][1];
 
 ### Set the additional paths and the filenames
 dataPath <- file.path(basePath, "data");
+workingPath <- file.path(basePath, "results - output");
 prepostdataFileName <- 'survey_68955_data_file.csv';
 prepostDataLoadScriptName <- '68955_Surveydata_syntax.R';
 followupDataFileName <- 'survey_97291_data_file.csv';
@@ -510,7 +511,7 @@ names(dat)[names(dat) == 'statements_13'] <- 'threateningInfoAlsoDesirableBehavi
 ### Store corresponding translations of questions
 statements <-
   c("If you present confronting information,\nyou also have to tell people\nwhat the desired behavior is", 
-    "One of the most important reasons why\npeople exhibit unhealthy or risky behavior\nis that they have a hard time exhibiting the right behavior,\nnot that they do not see the risks", 
+    "One of the most important reasons why people exhibit\nunhealthy or risky behavior is that they have a hard time\nexhibiting the right behavior, not that they do not see the risks", 
     "Confronting communications draws attention", 
     "People remember emotional communications better", 
     "Communication that evokes emotions leads to\nself-reflection regarding the relevant behavior", 
@@ -552,6 +553,51 @@ relevantStatements <- c('ifConfrontingAlsoDesirableBehavior',
 
 ```
 
+```{r translate}
+########################################################################
+### Translate variable levels
+########################################################################
+
+dat$gender <- factor(dat$gender,
+                     labels=c("Female", "Male"));
+
+dat$role <- factor(dat$role,
+                   labels=c("Intervention developers",
+                            "Program/campaign leaders",
+                            "Policy makers",
+                            "Managers",
+                            "Politicians",
+                            "Scientists",
+                            "Advertising professionals"));
+
+dat$employer <- factor(ifelse(dat$employer=="-oth-",
+                              rep(8, nrow(dat)),
+                              convertToNumeric(dat$employer)),
+                       labels=c("A national health promoting organisation",
+                                "A regional health promoting organisation",
+                                "A commercial organisation (e.g. advertising agency)",
+                                "Municipal government",
+                                "Provincial government",
+                                "National government",
+                                "A university",
+                                "Other"));
+
+########################################################################
+### Dichotomize role variable
+########################################################################
+
+dat$role_dichotomous <- ifelse(as.character(dat$role) %in%
+                                 c("Intervention developers",
+                                   "Program/campaign leaders",
+                                   "Scientists"),
+                               1, 2);
+
+dat$role_dichotomous <- factor(dat$role_dichotomous,
+                               labels=c("Close",
+                                        "Distant"));
+
+```
+
 # Beliefs
 
 ```{r beliefs, fig.cap="Participants' beliefs regarding behavior change." }
@@ -559,79 +605,132 @@ relevantStatements <- c('ifConfrontingAlsoDesirableBehavior',
 ### Sort and visualise beliefs
 ########################################################################
 
-  ### Means for the different statements
-  # round(colMeans(dat[, relevantStatements], na.rm=TRUE), 2);
+### Means for the different statements
+# round(colMeans(dat[, relevantStatements], na.rm=TRUE), 2);
 
-  sortOrder <- order(colMeans(dat[, relevantStatements], na.rm=TRUE));
+sortOrder <- order(colMeans(dat[, relevantStatements], na.rm=TRUE));
 
-  meansDiamondPlot(dat,
-                   items=relevantStatements[sortOrder],
-                   labels=statements[sortOrder],
-                   conf.level=.9999,
-                   dataSize=2, dataAlpha=.33, jitterWidth=.4,
-                   xlab="Scores and 99.99% confidence intervals for the means")
+meansDiamondPlot(dat,
+                 items=relevantStatements[sortOrder],
+                 labels=statements[sortOrder],
+                 conf.level=.9999,
+                 dataSize=2, dataAlpha=.33, jitterWidth=.4, jitterHeight=.4,
+                 xlab="Scores and 99.99% confidence intervals for the means")
+
+ggsave(file=file.path(workingPath, 'figure 2.png'),
+       width=18, height=16, units='cm', dpi=300,
+       type='cairo');
 
 ```
 
-# Indices
+# Equivalence of beliefs
 
-```{r indices, fig.cap="Participants' beliefs regarding behavior change." }
+```{r beliefs-compared, fig.cap="Participants' beliefs regarding behavior change separate for participants who are close or distant from behavior change science." }
+
+ggplot() + theme_bw() +
+  rawDataDiamondLayer(dat[dat$role_dichotomous=='Close',],
+                      items=relevantStatements[sortOrder],
+                      dataColor = "blue", size=4,
+                      dataAlpha=.1, jitterWidth=.4, jitterHeight=.4) +
+  rawDataDiamondLayer(dat[dat$role_dichotomous=='Distant',],
+                      items=relevantStatements[sortOrder],
+                      dataColor = "red", size=4,
+                      dataAlpha=.1, jitterWidth=.4, jitterHeight=.4) +
+  meansDiamondPlot(dat[dat$role_dichotomous=='Close',],
+                   items=relevantStatements[sortOrder],
+                   labels=statements[sortOrder],
+                   conf.level=.9999, color="blue", alpha = .33,
+                   returnLayerOnly = TRUE) +
+  meansDiamondPlot(dat[dat$role_dichotomous=='Distant',],
+                   items=relevantStatements[sortOrder],
+                   labels=statements[sortOrder],
+                   conf.level=.9999, color="red", alpha = .33,
+                   returnLayerOnly = TRUE) +
+  scale_x_continuous(breaks=1:7,
+                     name="Scores and 99% confidence intervals for the means") +
+  scale_y_continuous(breaks=seq_along(statements[sortOrder]),
+                     labels=statements[sortOrder],
+                     name=element_blank());
+
+ggsave(file=file.path(workingPath, 'figure 2B (supplemental).png'),
+       width=18, height=16, units='cm', dpi=300,
+       type='cairo');
+
+```
+
+# Belief indices
+
+```{r indices, fig.cap="Participants' belief indices regarding behavior change." }
 ########################################################################
 ### Compute indices
 ########################################################################
 
-  ### Invert reversed item
-  dat$irrelevanceOfSelfEfficacyOrSkills <-
-    invertItem(dat$importanceOfSelfEfficacyOrSkills);
+### Invert reversed item
+dat$irrelevanceOfSelfEfficacyOrSkills <-
+  invertItem(dat$importanceOfSelfEfficacyOrSkills);
 
-  ### Set scales
-  scales <- list(interventionsShouldIncreaseRiskperception = c('irrelevanceOfSelfEfficacyOrSkills',
-                                                               'importantToIncreaseRiskPerception',
-                                                               'insufficientAwarenessNegativeConsequence',
-                                                               'behaviorChangeEasyJustRiskUnaware'),
-                 threateningInterventionsShouldEnhanceEfficacy = c('ifConfrontingAlsoDesirableBehavior',
-                                                                   'threateningInfoAlsoDesirableBehavior'),
-                 interventionsShouldUseEmotionAndConfrontation = c('confrontingInfoDrawsAttention',
-                                                                   'emotionalInfoBetterRemembered',
-                                                                   'emotionsTriggerSelfreflection'),
-                 commonSenseIsReliableInInterventionDevelopment = c('inBehaviorChangeAssumeRationality',
-                                                                    'usefulToConsiderOneself'),
-                 increasingSeverityIncreasesSusceptibility = 'emphasisOnSeverityPersuadesSusceptibility');
+### Set scales
+scales <- list(interventionsShouldIncreaseRiskperception = c('irrelevanceOfSelfEfficacyOrSkills',
+                                                             'importantToIncreaseRiskPerception',
+                                                             'insufficientAwarenessNegativeConsequence',
+                                                             'behaviorChangeEasyJustRiskUnaware'),
+               threateningInterventionsShouldEnhanceEfficacy = c('ifConfrontingAlsoDesirableBehavior',
+                                                                 'threateningInfoAlsoDesirableBehavior'),
+               interventionsShouldUseEmotionAndConfrontation = c('confrontingInfoDrawsAttention',
+                                                                 'emotionalInfoBetterRemembered',
+                                                                 'emotionsTriggerSelfreflection'),
+               commonSenseIsReliableInInterventionDevelopment = c('inBehaviorChangeAssumeRationality',
+                                                                  'usefulToConsiderOneself'),
+               increasingSeverityIncreasesSusceptibility = 'emphasisOnSeverityPersuadesSusceptibility');
 
-  dat <- makeScales(dat, scales);
+dat <- makeScales(dat, scales);
 
-  sortOrder <- order(colMeans(dat[, names(scales)], na.rm=TRUE));
+sortOrder <- order(colMeans(dat[, names(scales)], na.rm=TRUE));
 
-  meansDiamondPlot(dat,
-                   items=names(scales)[sortOrder],
-                   conf.level=.9999,
-                   dataSize=2, dataAlpha=.33, jitterWidth=.4,
-                   xlab="Scores and 99.99% confidence intervals for the means")
+meansDiamondPlot(dat,
+                 items=names(scales)[sortOrder],
+                 conf.level=.9999,
+                 dataSize=2, dataAlpha=.33, jitterWidth=.4, jitterHeight=.4,
+                 xlab="Scores and 99.99% confidence intervals for the means")
+
+ggsave(file=file.path(workingPath, 'figure 2C (supplemental).png'),
+       width=18, height=16, units='cm', dpi=300,
+       type='cairo');
+
 
 ```
 
-```{r translate}
-########################################################################
-### Translate variable levels
-########################################################################
 
-  levels(dat$gender) <- c("Female", "Male");
+```{r indices-compared, fig.cap="Participants' belief indices regarding behavior change, separate for participants close to or distant from behavior change science." }
 
-  levels(dat$role) <- c("Intervention developers",
-                        "Program/campaign leaders",
-                        "Policy makers",
-                        "Managers",
-                        "Politicians",
-                        "Scientists",
-                        "Advertising professionals");
+ggplot() + theme_bw() +
+  rawDataDiamondLayer(dat[dat$role_dichotomous=='Close',],
+                      items=names(scales)[sortOrder],
+                      dataColor = "blue", size=4,
+                      dataAlpha=.1, jitterWidth=.4, jitterHeight=.4) +
+  rawDataDiamondLayer(dat[dat$role_dichotomous=='Distant',],
+                      items=names(scales)[sortOrder],
+                      dataColor = "red", size=4,
+                      dataAlpha=.1, jitterWidth=.4, jitterHeight=.4) +
+  meansDiamondPlot(dat[dat$role_dichotomous=='Close',],
+                   items=names(scales)[sortOrder],
+                   labels=statements[sortOrder],
+                   conf.level=.99, color="blue", alpha = .33,
+                   returnLayerOnly = TRUE) +
+  meansDiamondPlot(dat[dat$role_dichotomous=='Distant',],
+                   items=names(scales)[sortOrder],
+                   labels=statements[sortOrder],
+                   conf.level=.99, color="red", alpha = .33,
+                   returnLayerOnly = TRUE) +
+  scale_x_continuous(breaks=1:7,
+                     name="Scores and 99% confidence intervals for the means") +
+  scale_y_continuous(breaks=seq_along(names(scales)[sortOrder]),
+                     labels=names(scales)[sortOrder],
+                     name=element_blank());
 
-  levels(dat$employer) <- c("A national health promoting organisation",
-                            "A regional health promoting organisation",
-                            "A commercial organisation (e.g. advertising agency)",
-                            "Municipal government",
-                            "Provincial government",
-                            "National government",
-                            "A university");
+ggsave(file=file.path(workingPath, 'figure 2D (supplemental).png'),
+       width=18, height=16, units='cm', dpi=300,
+       type='cairo');
 
 ```
 
