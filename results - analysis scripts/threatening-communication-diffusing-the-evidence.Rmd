@@ -799,38 +799,42 @@ pander(descr(dat$convinced_conv));
 
 ```
 
-# Intervention: analyses
+# Did intervention evaluation of fear appeal interventions differ?
 
-```{r fig.width=10, fig.cap="The evaluation of the interventions of each type over time."}
+```{r fig.width=10, fig.height=3}
 
-########################################################################
-########################################################################
-### Visualisations of multilevel analyses
-########################################################################
-########################################################################
+t0_fear_variables <- grep('t0.*fear.*', names(dat), value=TRUE);
 
-dlvPlot(lDat,
-        x = 'measurementMoment',
-        y = 'value',
-        z = 'interventionType',
-        dotAlpha=0,
-        posDodge=.4,
-        error="none")$plot +
-  scale_y_continuous(breaks=1:10) +
-  coord_cartesian(ylim=c(1,10)) +
-  xlab("Measurement moment") +
-  ylab("Intervention evaluation") +
-  scale_fill_manual(values=brewer.pal(3, 'Set1'),
-                    labels=c("Fear appeal", "Knowledge", "Social cognitive")) +
-  scale_color_manual(values=brewer.pal(3, 'Set1'),
-                     labels=c("Fear appeal", "Knowledge", "Social cognitive")) +
-  guides(fill=guide_legend(title=NULL), color=guide_legend(title=NULL));
+dat$t0_v1_fear_mean <- rowMeans(dat[, t0_fear_variables], na.rm=TRUE);
 
-ggsave(file=file.path(workingPath, 'figure 4.png'),
-       width=18, height=10, units='cm', dpi=300,
-       type='cairo');
+meansComparisonDiamondPlot(dat, items='t0_v1_fear_mean',
+                           compareBy='role_dichotomous',
+                           labels="",
+                           dataAlpha=.5,
+                           jitterWidth=0,
+                           jitterHeight=.1,
+                           xbreaks=c(1:10),
+                           outputFile = file.path(workingPath, 'figure 4.png'),
+                           outputWidth=19,
+                           outputHeight=5);
+
+duoComparisonDiamondPlot(dat, items='t0_v1_fear_mean',
+                         compareBy='role_dichotomous',
+                         dataAlpha=.5,
+                         jitterHeight=.1,
+                         xbreaks=c(1:10));
+
+meanDiff(x=dat$role_dichotomous, y=dat$t0_v1_fear_mean);
+
+meansComparisonDiamondPlot(dat, items='t0_v1_fear_mean',
+                           compareBy='role',
+                           dataAlpha=.5,
+                           jitterHeight=.1,
+                           xbreaks=c(1:10));
 
 ```
+
+# Intervention: analyses
 
 ```{r multilevel-preparation}
 
@@ -871,6 +875,37 @@ lDat$interventionType <- factor(lDat$interventionType);
 lDat$measurementMoment <- factor(lDat$measurementMoment);
 lDat$behaviorDomain <- factor(lDat$behaviorDomain);
 lDat$numberOfScenarios <- factor(lDat$numberOfScenarios);
+
+```
+
+```{r fig.width=10, fig.cap="The evaluation of the interventions of each type over time."}
+
+########################################################################
+########################################################################
+### Visualisations of multilevel analyses
+########################################################################
+########################################################################
+
+dlvPlot(lDat,
+        x = 'measurementMoment',
+        y = 'value',
+        z = 'interventionType',
+        dotAlpha=0,
+        posDodge=.4,
+        error="none")$plot +
+  scale_y_continuous(breaks=1:10) +
+  coord_cartesian(ylim=c(1,10)) +
+  xlab("Measurement moment") +
+  ylab("Intervention evaluation") +
+  scale_fill_manual(values=brewer.pal(3, 'Set1'),
+                    labels=c("Fear appeal", "Knowledge", "Social cognitive")) +
+  scale_color_manual(values=brewer.pal(3, 'Set1'),
+                     labels=c("Fear appeal", "Knowledge", "Social cognitive")) +
+  guides(fill=guide_legend(title=NULL), color=guide_legend(title=NULL));
+
+ggsave(file=file.path(workingPath, 'figure 5.png'),
+       width=18, height=10, units='cm', dpi=300,
+       type='cairo');
 
 ```
 
