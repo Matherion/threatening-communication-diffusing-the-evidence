@@ -66,7 +66,7 @@ safeRequire('lme4');
 safeRequire('lmerTest');
 safeRequire('ggplot2');
 safeRequire('lubridate');
-safeRequire('RColorBrewer');
+safeRequire('viridis');
 
 ###########################################################
 ### R Markdown configuration
@@ -88,10 +88,7 @@ options(width=120);
 panderOptions('table.split.table', Inf);
 panderOptions('table.alignment.rownames', "left");
 
-# options(figure_counter = TRUE);
-# options(table_counter = TRUE);
-
-setFigCapNumbering();
+setFigCapNumbering(resetCounterTo=2);
 setTabCapNumbering();
 
 ```
@@ -683,6 +680,7 @@ fig2 <- duoComparisonDiamondPlot(dat,
                                  items=relevantStatements[sortOrder],
                                  compareBy='role_dichotomous',
                                  labels=statements[sortOrder],
+                                 comparisonColors=viridis(2, end=.8),
                                  conf.level=c(.99, .95),
                                  dataSize=2, dataAlpha=.33,
                                  jitterWidth=.4, jitterHeight=.4)
@@ -743,6 +741,7 @@ fig3 <- duoComparisonDiamondPlot(dat,
                                           "Common sense is reliable in\nintervention development",
                                           "Increasing severity can cause\nsusceptibility to increase"),
                                  compareBy='role_dichotomous',
+                                 comparisonColors=rev(viridis(2, end=.8)),
                                  conf.level=c(.99, .95),
                                  dataSize=2, dataAlpha=.33,
                                  jitterWidth=.4, jitterHeight=.4,
@@ -787,7 +786,7 @@ dat$interventionTime <- sapply(strsplit(dat$totalGroupTime, ":"),
 
 Participants spent on average `r floor(mean(dat$interventionTime, na.rm=TRUE) / 60); ` minutes and `r round(((mean(dat$interventionTime, na.rm=TRUE) / 60) %% 1) * 60, 2); ` seconds on the page with the intervention.
 
-```{r}
+```{r, results='asis'}
 
 pandoc.header('Descriptives of whether participants considered the provided intervention clear.', level=2);
 
@@ -814,20 +813,24 @@ meansComparisonDiamondPlot(dat, items='t0_v1_fear_mean',
                            jitterWidth=0,
                            jitterHeight=.1,
                            xbreaks=c(1:10),
+                           comparisonColors=rev(viridis(2, end=.8)),
                            outputFile = file.path(workingPath, 'figure 4.png'),
                            outputWidth=19,
                            outputHeight=5);
 
 duoComparisonDiamondPlot(dat, items='t0_v1_fear_mean',
                          compareBy='role_dichotomous',
+                         label="",
+                         comparisonColors=rev(viridis(2, end=.8)),
                          dataAlpha=.5,
                          jitterHeight=.1,
                          xbreaks=c(1:10));
 
-meanDiff(x=dat$role_dichotomous, y=dat$t0_v1_fear_mean);
+pander(meanDiff(x=dat$role_dichotomous, y=dat$t0_v1_fear_mean));
 
 meansComparisonDiamondPlot(dat, items='t0_v1_fear_mean',
                            compareBy='role',
+                           comparisonColors=viridis(7),
                            dataAlpha=.5,
                            jitterHeight=.1,
                            xbreaks=c(1:10));
@@ -878,7 +881,7 @@ lDat$numberOfScenarios <- factor(lDat$numberOfScenarios);
 
 ```
 
-```{r fig.width=10, fig.cap="The evaluation of the interventions of each type over time."}
+```{r fig.width=10, fig.cap="The evaluation of the interventions of each type over time.", messages=FALSE}
 
 ########################################################################
 ########################################################################
@@ -886,25 +889,91 @@ lDat$numberOfScenarios <- factor(lDat$numberOfScenarios);
 ########################################################################
 ########################################################################
 
-dlvPlot(lDat,
-        x = 'measurementMoment',
-        y = 'value',
-        z = 'interventionType',
-        dotAlpha=0,
-        posDodge=.4,
-        error="none")$plot +
+lDatExcerpt <- lDat[, c('interventionType', 'measurementMoment', 'value')];
+lDatExcerpt <- lDatExcerpt[complete.cases(lDatExcerpt), ];
+
+diamondLayerDat <-
+  by(lDatExcerpt,
+     lDatExcerpt$interventionType:lDatExcerpt$measurementMoment,
+     function(Df) {
+       ciVector <- meanConfInt(Df$value);
+       ciVector <- c(ciVector$output$ci[1],
+                     mean(Df$value, na.rm=TRUE),
+                     ciVector$output$ci[2]);
+       res<- diamondCoordinates(ciVector,
+                                direction = "vertical",
+                                fixedSize=.1);
+       res$measurementMoment <- as.factor(rep(unique(Df$measurementMoment),
+                                          nrow(res)));
+       res$interventionType <- as.factor(rep(unique(Df$interventionType),
+                                         nrow(res)));
+       return(res);
+     });
+
+### Set x coordinate adjustments and colors
+timeAdjustment <- c('t0' = 0,
+                    't1' = 1,
+                    't2' = 2);
+typeAdjustment <- c('fear' = -.25,
+                    'know' = 0,
+                    'scd' = .25);
+
+### Adjust x coordinates
+diamondLayerDat <-
+  lapply(names(diamondLayerDat),
+         function(diamondName) {
+           diamondLayerDat[[diamondName]]$x <-
+             diamondLayerDat[[diamondName]]$x +
+             timeAdjustment[which(sapply(names(timeAdjustment), grep, x = diamondName) == 1)];
+           diamondLayerDat[[diamondName]]$x <-
+             diamondLayerDat[[diamondName]]$x +
+             typeAdjustment[which(sapply(names(typeAdjustment), grep, x = diamondName) == 1)];
+           return(diamondLayerDat[[diamondName]]);
+         });
+
+### Generate diamonds
+diamondLayers <-
+  lapply(diamondLayerDat,
+         geom_polygon,
+         mapping = aes(x=x, y=y));
+
+ggplot(lDat,
+       aes_string(x = 'measurementMoment',
+                  y = 'value',
+                  color = 'interventionType',
+                  fill = 'interventionType',
+                  group = paste0('measurementMoment:interventionType'))) +
+  geom_violin(alpha = .2,
+              #color=NA,
+              position = position_dodge(.75),
+              na.rm=TRUE) +
+  geom_point(alpha = .1,
+             position = position_jitterdodge(dodge.width=.75,
+                                             jitter.width=.5,
+                                             jitter.height=.3),
+             na.rm=TRUE)+
+  geom_line(aes_string(group='interventionType'),
+            stat = 'summary', fun.y='mean',
+            size=2,
+            alpha = .5,
+            position = position_dodge(.75),
+            na.rm=TRUE) +
+  diamondLayers +
   scale_y_continuous(breaks=1:10) +
   coord_cartesian(ylim=c(1,10)) +
   xlab("Measurement moment") +
   ylab("Intervention evaluation") +
-  scale_fill_manual(values=brewer.pal(3, 'Set1'),
-                    labels=c("Fear appeal", "Knowledge", "Social cognitive")) +
-  scale_color_manual(values=brewer.pal(3, 'Set1'),
+  theme_minimal() +
+  scale_fill_viridis(discrete=TRUE,
+                     end=.8,
+                     labels=c("Fear appeal", "Knowledge", "Social cognitive")) +
+  scale_color_viridis(discrete=TRUE,
+                     end=.8,
                      labels=c("Fear appeal", "Knowledge", "Social cognitive")) +
   guides(fill=guide_legend(title=NULL), color=guide_legend(title=NULL));
 
 ggsave(file=file.path(workingPath, 'figure 5.png'),
-       width=18, height=10, units='cm', dpi=300,
+       width=22, height=14, units='cm', dpi=300,
        type='cairo');
 
 ```
